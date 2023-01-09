@@ -1,2 +1,4 @@
 data/glove.840B.300d.txt
 .ipynb_checkpoints/*
+.venv
+__pycache__
