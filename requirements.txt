@@ -1,6 +1,7 @@
-lightfm==1.15
-matplotlib==2.2.2
+jsonlines
+lightfm
+matplotlib
 numpy
-plotly==3.6.1
+plotly
 scikit-learn
 scipy

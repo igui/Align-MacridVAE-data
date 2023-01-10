@@ -1,4 +1,12 @@
+# Glove stuff
 data/glove.840B.300d.txt
 .ipynb_checkpoints/*
+
+# Virtualenvs
 .venv
+
+# Python Cache
 __pycache__
+
+# This directory can be huge
+data/amazon
