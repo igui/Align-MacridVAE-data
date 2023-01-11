@@ -1,7 +1,10 @@
-jsonlines
+# For running VBPR
 lightfm
 matplotlib
 numpy
 plotly
 scikit-learn
 scipy
+
+# Extra dependencies that can be cool
+jsonlines
