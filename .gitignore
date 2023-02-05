@@ -8,5 +8,8 @@ data/glove.840B.300d.txt
 # Python Cache
 __pycache__
 
+# PyCharm
+.idea
+
 # This directory can be huge
 data/amazon

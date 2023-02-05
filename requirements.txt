@@ -6,5 +6,10 @@ plotly
 scikit-learn
 scipy
 
+# Extra, for downloading data
+pandas
+tqdm
+sqlalchemy
+
 # Extra dependencies that can be cool
 jsonlines
