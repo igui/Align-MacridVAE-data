@@ -7,9 +7,14 @@ scikit-learn
 scipy
 
 # Extra, for downloading data
-pandas
 tqdm
 sqlalchemy
-
-# Extra dependencies that can be cool
 jsonlines
+
+# For feature extraction
+torch
+torchvision
+torchaudio
+
+# Extra dependencies for data manipulation
+pandas

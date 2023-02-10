@@ -3,25 +3,27 @@ import logging
 import os
 import re
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from itertools import count, islice
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from shutil import COPY_BUFSIZE
-import threading
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import jsonlines
+import pandas as pd
 import requests
 import tqdm
 import urllib3
-from sqlalchemy import Boolean, Column, Date, Float, ForeignKey, Integer, \
-    String, create_engine, delete, event, func, select, text
+from sqlalchemy import (Boolean, Column, Date, Float, ForeignKey, Integer,
+                        String, create_engine, delete, event, func, select,
+                        text)
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Session, declarative_mixin, \
-    relationship
+from sqlalchemy.orm import (DeclarativeBase, Session, declarative_mixin,
+                            relationship)
 from sqlalchemy.schema import CreateIndex, DropIndex, DropTable
 
 BASE_DATA_FOLDER = Path('data/amazon/')
@@ -578,7 +580,7 @@ def product_images_dir(dataset: str) -> Path:
 
 
 def get_image_url(slug: str, max_dimension: int = 400) -> str:
-    return f'{IMAGE_PREFIX}{slug}._SX{max_dimension}_.jpg'
+    return f'{IMAGE_PREFIX}{slug}._SS{max_dimension}_.jpg'
 
 
 def download_an_image(args: Tuple[str, Path, Any]) -> Optional[Path]:
@@ -991,3 +993,23 @@ def load_amazon_dataset(
     vacuum_dataset(dataset)
     # Totally optional
     log_dataset_metrics(dataset)
+
+
+def reviews_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+    with create_session(dataset) as session:
+        query = session.query(Review)
+        if limit is not None:
+            query = query.limit(100)
+        stmt = query.statement
+
+    return pd.read_sql_query(stmt, session.bind.connect())
+
+
+def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+    with create_session(dataset) as session:
+        query = session.query(Product)
+        if limit is not None:
+            query = query.limit(100)
+        stmt = query.statement
+
+    return pd.read_sql_query(stmt, session.bind.connect())
