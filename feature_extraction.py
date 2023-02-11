@@ -273,9 +273,9 @@ def extract_features(
     dataloader = DataLoader(dataset, batch_size=batch_size)
     feature_extractor = feature_extractor.to(device)
 
-    with tqdm(total=len(dataset), unit_scale=True, unit='image', smoothing=0,
-              desc='Extracting features') as progress, \
-            ThreadPoolExecutor(max_workers=8) as executor:
+    with tqdm(total=len(dataset), unit_scale=True, unit='image',
+              smoothing=0, desc='Extracting features') as progress, \
+            ThreadPoolExecutor(max_workers=min(8, batch_size)) as executor:
         for batch in dataloader:
             result = feature_extractor(batch['img'])
             combined_results = zip(batch['path'], result['features'])
