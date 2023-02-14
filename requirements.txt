@@ -12,9 +12,12 @@ sqlalchemy
 jsonlines
 
 # For feature extraction
+pandas
 torch
 torchvision
 torchaudio
+transformers
+accelerate
 
-# Extra dependencies for data manipulation
-pandas
+# Extra dependencies for monitoring
+nvidia-ml-py3

@@ -2,10 +2,11 @@ import gzip
 import logging
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import pandas as pd
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -66,6 +67,7 @@ DEFAULT_TRANSFORM = square_resize(size=400, fill=255)
 
 def get_default_device() -> str:
     return ("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class ImageFeatureExtractionDataset(Dataset):
     """Image dataset from a directory"""
@@ -239,7 +241,7 @@ def load_features_from_file(src: Path):
         return np.frombuffer(f.read(), dtype=np.float32)
 
 
-def extract_features(
+def run_feature_extractor(
     asset_path: Path,
     feature_extractor: nn.Module,
     suffix_name: str,
@@ -267,14 +269,14 @@ def extract_features(
             p.unlink(missing_ok=True)
 
     if len(dataset) == 0:
-        logger.info('All images have extracted features :)')
+        # All images have extracted features :)
         return
 
     dataloader = DataLoader(dataset, batch_size=batch_size)
     feature_extractor = feature_extractor.to(device)
 
     with tqdm(total=len(dataset), unit_scale=True, unit='image',
-              smoothing=0, desc='Extracting features') as progress, \
+              smoothing=0, desc='Extracting features  ') as progress, \
             ThreadPoolExecutor(max_workers=min(8, batch_size)) as executor:
         for batch in dataloader:
             result = feature_extractor(batch['img'])
@@ -286,7 +288,7 @@ def extract_features(
                 executor.submit(save_features_to_file, dest, features, progress)
 
 
-def extract_features_one_image(
+def test_extract_one_image(
     image_path: Path,
     feature_extractor: nn.Module,
     device: Optional[str] = None,
@@ -304,38 +306,133 @@ def extract_features_one_image(
 
 
 def extract_alexnet_features(
+    products_df: pd.DataFrame,
     asset_path: Path,
     force: bool = False,
     batch_size: int = 1024,
     transform: Optional[TransformType] = DEFAULT_TRANSFORM,
     device: Optional[str] = None
-):
-    alexnet_feature_extractor = AlexNetFeatureExtractor()
-    extract_features(
+) -> Dict[str, npt.NDArray]:
+    feature_extractor = AlexNetFeatureExtractor()
+    suffix = 'alexnet'
+    run_feature_extractor(
         asset_path=asset_path,
         force=force,
-        feature_extractor=alexnet_feature_extractor,
-        suffix_name='alexnet',
+        feature_extractor=feature_extractor,
+        suffix_name=suffix,
         batch_size=batch_size,
         transform=transform,
         device=device
     )
 
+    return build_feature_dict(
+        products_df=products_df,
+        asset_path=asset_path,
+        suffix_name=suffix
+    )
+
 
 def extract_vit_features(
+    products_df: pd.DataFrame,
     asset_path: Path,
     force: bool = False,
     batch_size: int = 16,
     transform: Optional[TransformType] = DEFAULT_TRANSFORM,
     device: Optional[str] = None
-):
-    alexnet_feature_extractor = ViTFeatureExtractor()
-    extract_features(
+) -> Dict[str, npt.NDArray]:
+    feature_extractor = ViTFeatureExtractor()
+    suffix = 'vit'
+
+    run_feature_extractor(
         asset_path=asset_path,
         force=force,
-        feature_extractor=alexnet_feature_extractor,
-        suffix_name='vit',
+        feature_extractor=feature_extractor,
+        suffix_name=suffix,
         batch_size=batch_size,
         transform=transform,
         device=device
     )
+
+    return build_feature_dict(
+        products_df=products_df,
+        asset_path=asset_path,
+        suffix_name=suffix
+    )
+
+
+def process_one_asin(
+    asin: str, image_slugs: List[str], asset_path: str, suffix_name
+) -> Tuple[str, npt.NDArray]:
+    # Empty images have no features
+    image_slugs = [
+        slug
+        for slug in image_slugs
+        if os.path.getsize(os.path.join(asset_path, f'{slug}.jpg')) > 0
+    ]
+
+    all_features = np.array([
+        load_features_from_file(os.path.join(asset_path, f'{slug}.{suffix_name}'))
+        for slug in image_slugs
+    ])
+    if len(all_features) == 0:
+        mean_feature = np.nan
+    else:
+        mean_feature = all_features.mean(axis=0)
+
+    return (asin, mean_feature)
+
+
+def build_feature_dict(
+    products_df: pd.DataFrame,
+    asset_path: Path,
+    suffix_name: str,
+) -> Dict[str, npt.NDArray]:
+    """
+    Returns a dictionary (asin -> np.ndarray) with the image features per
+    product.
+    This relies on having executed extract_vit_features() or
+    extract_alexnet_features() before
+    """
+    extracted_features: Dict[str, npt.NDArray] = {}
+    workers = max(os.cpu_count() // 2, 1)
+
+    with tqdm(
+        desc='Building feature dict',
+        total=len(products_df),
+        unit='product',
+        unit_scale=True,
+        smoothing=0.01
+    ) as progress, ProcessPoolExecutor(max_workers=workers) as executor:
+        str_asset_path = str(asset_path.absolute())
+        futures = [
+            executor.submit(
+                process_one_asin,
+                asin=row.asin,
+                image_slugs=row.image_slug,
+                asset_path=str_asset_path,
+                suffix_name=suffix_name
+            )
+            for row in products_df.itertuples()
+        ]
+
+        try:
+            for f in as_completed(futures):
+                asin, mean_feature = f.result()
+                extracted_features[asin] = mean_feature
+                progress.update()
+        except KeyboardInterrupt:
+            executor.shutdown(wait=False)
+
+    nan_substitute = np.zeros_like(next(
+        (f for f in extracted_features.values() if not np.isnan(f).any())
+    ))
+
+    # We have to transform nans to some zero values
+    nan_values = 0
+    for asin in extracted_features:
+        if np.isnan(extracted_features[asin]).any():
+            nan_values += 1
+            extracted_features[asin] = nan_substitute
+
+    logger.info(f'Products with no values: {nan_values}')
+    return extracted_features

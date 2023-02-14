@@ -25,6 +25,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (DeclarativeBase, Session, declarative_mixin,
                             relationship)
 from sqlalchemy.schema import CreateIndex, DropIndex, DropTable
+from sqlalchemy.sql.functions import GenericFunction
 
 BASE_DATA_FOLDER = Path('data/amazon/')
 IMAGE_DOWNLOAD_PROCESSES = 4
@@ -235,6 +236,21 @@ def set_sqlite_pragma(dbapi_connection, _connection_record):
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA journal_mode=MEMORY")
     cursor.close()
+
+
+
+class group_concat(GenericFunction):
+    # Avoid re-registering the function if we reload the module
+    _register = not hasattr(func, 'group_concat')
+
+    type = String()
+
+class json_object(GenericFunction):
+    # Avoid re-registering the function if we reload the module
+    _register = not hasattr(func, 'json_object')
+
+    type = String()
+
 
 
 def dataset_db_path(dataset: str) -> Path:
@@ -1005,11 +1021,66 @@ def reviews_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
     return pd.read_sql_query(stmt, session.bind.connect())
 
 
-def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
-    with create_session(dataset) as session:
-        query = session.query(Product)
-        if limit is not None:
-            query = query.limit(100)
-        stmt = query.statement
+def split_line_str(s: Optional[str], separator: str) -> List[str]:
+    """Splits a (nullable) string with a separator"""
+    if s is None:
+        return []
+    else:
+        return s.split(separator)
 
-    return pd.read_sql_query(stmt, session.bind.connect())
+def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+    # We use as sparator something we don't use anywhere else (ESCAPE (U+001B))
+    sep = '\x1b'
+
+    images = select(
+            ProductImage.product_id,
+            func.group_concat(ProductImage.slug, sep).label('image_slug'),
+            func.group_concat(ProductImage.url, sep).label('image_url')
+    ).group_by(ProductImage.product_id)
+
+    product_features = select(
+        ProductFeature.product_id,
+        func.group_concat(ProductFeature.name, sep).label('feature')
+    ).group_by(ProductFeature.product_id)
+
+    product_categories = select(
+        ProductCategory.product_id,
+        func.group_concat(ProductCategory.name, sep).label('category')
+    ).group_by(ProductCategory.product_id)
+
+    tech_detail = select(
+        TechnicalDetail.product_id,
+        func.group_concat(func.json_object(
+            'kind', TechnicalDetail.kind,
+            'name', TechnicalDetail.name,
+            'value', TechnicalDetail.value
+        ), sep).label('tech_detail')
+    ).group_by(TechnicalDetail.product_id)
+
+    from_table = Product.__table__
+    for join_cte in [images, product_features, product_categories, tech_detail]:
+        from_table = from_table.join(
+            join_cte,
+            Product.id == join_cte.c.product_id,
+            isouter=True
+    )
+
+    query = select(
+        Product,
+        images.c.image_slug,
+        images.c.image_url,
+        product_features.c.feature,
+        product_categories.c.category,
+        tech_detail.c.tech_detail,
+    ).select_from(from_table)
+
+    if limit is not None:
+        query = query.limit(100)
+
+    with create_session(dataset) as session:
+        df = pd.read_sql_query(query, session.bind.connect(), index_col='id')
+
+        for col in ['image_url', 'image_slug', 'feature', 'category']:
+            df[col] = df[col].apply(split_line_str, args=(sep,))
+
+        return df

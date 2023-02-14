@@ -13,3 +13,6 @@ __pycache__
 
 # This directory can be huge
 data/amazon
+
+# Some temp files here
+assets
