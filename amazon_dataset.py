@@ -31,6 +31,7 @@ BASE_DATA_FOLDER = Path('data/amazon/')
 IMAGE_DOWNLOAD_PROCESSES = 4
 DB_CHUNK_SIZE = 2000
 BASE_SOURCE_URL = 'https://jmcauley.ucsd.edu/data/amazon_v2'
+# Prefix for images in the dataset
 IMAGE_PREFIX = 'https://images-na.ssl-images-amazon.com/images/I/'
 
 
@@ -296,6 +297,14 @@ def create_session(dataset: str, echo=False) -> Session:
     return Session(engine)
 
 
+def product_title_cleaned(title: Optional[str]) -> Optional[str]:
+    if title is None:
+        return None
+    if 'function(' in title:
+        return None  # it has javascript in 99% of cases
+    return title
+
+
 def process_product_chunk(
         chunk: List[Tuple[Dict, int]],
         asins: Set[int],
@@ -318,7 +327,7 @@ def process_product_chunk(
             'id': obj_id,
             'asin': obj['asin'],
             'description': get_product_description(obj),
-            'title': obj.get('title'),
+            'title': product_title_cleaned(obj.get('title')),
             'brand': obj.get('brand'),
             'main_cat': obj.get('main_cat'),
             'rank': get_product_rank(obj),
@@ -578,12 +587,12 @@ def read_duplicate_products(dataset: str) -> List[Set[str]]:
 
 def get_image_slug(image_url: str) -> Optional[str]:
     image_re = re.compile(
-        f'(?P<prefix>{re.escape(IMAGE_PREFIX)}'
+        f'(?P<prefix>https:\/\/.*amazon.com\/images\/I\/'
         # The common name like 71vAyOySUqL.
         r'(?P<name>.*)\.)'
         # Dimension like _SR400_
-        r'(?P<dimensions>_((AC_)?(SX\d+_SY\d+_CR(,\d+)+_)|(SR\d+,\d+_)|'
-        r'(SS\d+_)|(US\d+_)|(SY\d+)))'
+        r'(?P<dimensions>_?((AC_)?(SX\d+_SY\d+_CR(,\d+)+_?)|(SR\d+,\d+_?)|'
+        r'(SS\d+_?)|(US\d+_?)|(SY\d+)))'
         r'(?P<suffix>\.jpg)'
     )
     match = image_re.match(image_url)
@@ -659,7 +668,8 @@ def download_images(dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES):
                    smoothing=0.01) as progress:
         errors = 0
         args = [
-            (slug, dest_dir, thread_storage) for slug in pending_slugs
+            (slug, get_image_url(slug), dest_dir, thread_storage)
+            for slug in pending_slugs
         ]
         for res in pool.imap_unordered(download_an_image, args):
             if res is None:
@@ -668,6 +678,69 @@ def download_images(dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES):
                     f'HTTP404 errors {errors}', refresh=False
                 )
             progress.update()
+
+
+def get_alternative_image_url(asin: str, max_dimension: int = 400) -> str:
+    return f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&MarketPlace=US&ASIN={asin}&ServiceVersion=20070822&ID=AsinImage&WS=1&Format=SS{max_dimension}"
+
+
+def download_alternative_image(
+    asin: str,
+    session: requests.Session,
+    dest_dir: Path
+) -> Tuple[str, str]:
+    url = get_alternative_image_url(asin)
+    resp = session.get(url, allow_redirects=True, stream=True)
+    resp.raise_for_status()
+
+    # After redirect
+    url = resp.request.url
+    slug = get_image_slug(url)
+    if not slug:
+        return url, None
+
+    dest = dest_dir / f'{slug}.jpg'
+    with dest.open('wb') as dest_file:
+        for chunk in resp.iter_content(chunk_size=COPY_BUFSIZE):
+            dest_file.write(chunk)
+
+    return url, slug
+
+
+def add_image_for_remaining_products(dataset: str):
+    dest_dir = product_images_dir(dataset)
+    def has_valid_images(row: Any) -> Path:
+        return any(
+            slug
+            for slug in row['image_slug']
+            if os.path.getsize(os.path.join(dest_dir, f'{slug}.jpg')) > 0
+        )
+
+    df = products_df(dataset)
+    no_images = df.loc[~df.apply(has_valid_images, axis=1)]
+
+    with tqdm.tqdm(total=len(no_images), unit='image') as progress, \
+        create_session(dataset) as sql_session, \
+        requests.Session() as requests_session:
+            errors = 0
+            for row in no_images.itertuples():
+                url, slug = download_alternative_image(
+                    asin=row.asin, session=requests_session, dest_dir=dest_dir
+                )
+
+                if slug:
+                    sql_session.add(ProductImage(
+                        product_id=row.Index, url=url, slug=slug
+                    ))
+                    sql_session.commit()
+                else:
+                    errors += 1
+                    progress.set_postfix_str(
+                        f'Errors {errors} {url}',
+                        refresh=False
+                    )
+                progress.update()
+
 
 
 def process_review_chunk(
