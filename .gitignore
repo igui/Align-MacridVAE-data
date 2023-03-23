@@ -14,5 +14,9 @@ __pycache__
 # This directory can be huge
 data/amazon
 
+# Only Generated data goes here
+data/DMRL-*
+data/SEM-MacridVAE-*
+
 # Some temp files here
 assets

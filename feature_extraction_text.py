@@ -1,20 +1,16 @@
 from typing import Dict, Optional
 
-from pathlib import Path
 import numpy.typing as npt
 import pandas as pd
 import torch
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
-import numpy as np
 
 
 # How many products do we store in a single batch
 PRODUCT_BATCH_SIZE=2
 # How many sequences do we store in a single sample
 MAX_SEQ_SIZE = 256
-# How many characters to extract from the description (too large makes the tokenizer to work slower)
-MAX_TEXTUAL_FEATURE_LENGTH = 10240
 
 
 def get_default_device() -> str:
@@ -57,11 +53,9 @@ def tokenize_products(
     """Makes a Tensor from the input string"""
     # To avoid joinig NAs with strings
     full_texts = df['title'].fillna('') + ' ' +  df['description'].fillna('')
-    # To speed up tokenization
-    truncated = full_texts.apply(lambda x: x[:MAX_TEXTUAL_FEATURE_LENGTH])
 
     return tokenizer(
-        truncated.to_list(),
+        full_texts.to_list(),
         padding=True,
         max_length=MAX_SEQ_SIZE,
         truncation=True,
@@ -80,11 +74,11 @@ def extract_text_features(
 
     tokenizer = BertTokenizer.from_pretrained(
         'bert-large-cased',
-        local_files_only=True
+        #local_files_only=True
     )
     model = BertModel.from_pretrained(
         "bert-large-cased",
-        local_files_only=True
+        #local_files_only=True
     )
 
     extracted_features: Dict[str, npt.NDArray] = {}
