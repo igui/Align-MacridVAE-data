@@ -1148,7 +1148,7 @@ def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
     ).select_from(from_table)
 
     if limit is not None:
-        query = query.limit(100)
+        query = query.limit(limit)
 
     with create_session(dataset) as session:
         df = pd.read_sql_query(query, session.bind.connect(), index_col='id')
@@ -1157,3 +1157,22 @@ def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
             df[col] = df[col].apply(split_line_str, args=(sep,))
 
         return df
+
+
+def product_images_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+    query = select(ProductImage)
+
+    if limit is not None:
+        query = query.limit(limit)
+
+    with create_session(dataset) as session:
+        return pd.read_sql_query(query, session.bind.connect(), index_col='id')
+
+def product_categories_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+    query = select(ProductCategory)
+
+    if limit is not None:
+        query = query.limit(limit)
+
+    with create_session(dataset) as session:
+        return pd.read_sql_query(query, session.bind.connect(), index_col='id')
