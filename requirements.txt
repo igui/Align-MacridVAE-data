@@ -21,3 +21,9 @@ accelerate
 
 # Extra dependencies for monitoring
 nvidia-ml-py3
+
+# For the CLIP model
+ftfy
+regex
+tqdm
+CLIP @ git+https://github.com/openai/CLIP.git

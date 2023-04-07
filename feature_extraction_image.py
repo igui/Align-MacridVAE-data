@@ -2,7 +2,7 @@ import gzip
 import logging
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, Future
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -19,7 +19,8 @@ from torchvision.models import (AlexNet_Weights, ViT_L_16_Weights, alexnet,
                                 vit_l_16)
 from torchvision.models.feature_extraction import create_feature_extractor
 from tqdm import tqdm
-
+from torchvision.transforms import InterpolationMode
+import clip
 
 def setup_logging() -> logging.Logger:
     res = logging.getLogger('feature_extraction')
@@ -228,8 +229,35 @@ class ViTFeatureExtractor(nn.Module):
             return self.body(x)
 
 
+class CLIPFeatureExtractor(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = None
+
+        # TODO: retrieve from the model above
+        n_px = 226
+
+        # From the _preprocess object (without the Tensor RGB conversion)
+        self.transforms = T.Compose([
+            T.Resize(n_px, interpolation=InterpolationMode.BICUBIC),
+            T.CenterCrop(n_px),
+            T.ConvertImageDtype(torch.float32),
+            T.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+        ])
+
+    def to(self, device: str):
+        self.model, _preprocess = clip.load('ViT-L/14', device)
+        return self
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        assert self.model is not None, "Must call to(device) first!"
+        with torch.no_grad():
+            x = self.transforms(x)
+            return { 'features': self.model.encode_image(x) }
+
+
 def save_features_to_file(dest: Path, features: torch.Tensor, progress: tqdm):
-    nparray: npt.NDArray = features.numpy(force=True)
+    nparray: npt.NDArray = features.numpy(force=True).astype(np.float32)
     assert nparray.dtype == np.float32
     with gzip.open(dest, mode='wb') as dest_gzip:
         dest_gzip.write(nparray.tobytes(order='C'))
@@ -239,6 +267,10 @@ def save_features_to_file(dest: Path, features: torch.Tensor, progress: tqdm):
 def load_features_from_file(src: Path):
     with gzip.open(src, 'rb') as f:
         return np.frombuffer(f.read(), dtype=np.float32)
+
+
+def raise_if_error(fut: Future):
+    fut.result(0)
 
 
 def run_feature_extractor(
@@ -285,7 +317,10 @@ def run_feature_extractor(
             for img_path, features in combined_results:
                 img_path = Path(img_path)
                 dest = img_path.parent / f'{img_path.stem}.{suffix_name}'
-                executor.submit(save_features_to_file, dest, features, progress)
+                res = executor.submit(
+                    save_features_to_file, dest, features, progress
+                )
+                res.add_done_callback(raise_if_error)
 
 
 def test_extract_one_image(
@@ -342,6 +377,33 @@ def extract_vit_features(
 ) -> Dict[str, npt.NDArray]:
     feature_extractor = ViTFeatureExtractor()
     suffix = 'vit'
+
+    run_feature_extractor(
+        asset_path=asset_path,
+        force=force,
+        feature_extractor=feature_extractor,
+        suffix_name=suffix,
+        batch_size=batch_size,
+        transform=transform,
+        device=device
+    )
+
+    return build_feature_dict(
+        products_df=products_df,
+        asset_path=asset_path,
+        suffix_name=suffix
+    )
+
+def extract_clip_features(
+    products_df: pd.DataFrame,
+    asset_path: Path,
+    force: bool = False,
+    batch_size: int = 16,
+    transform: Optional[TransformType] = DEFAULT_TRANSFORM,
+    device: Optional[str] = None
+) -> Dict[str, npt.NDArray]:
+    feature_extractor = CLIPFeatureExtractor()
+    suffix = 'clip'
 
     run_feature_extractor(
         asset_path=asset_path,
