@@ -395,7 +395,7 @@ def extract_vit_features(
     )
 
 def extract_clip_features(
-    products_df: pd.DataFrame,
+    products_df: Optional[pd.DataFrame],
     asset_path: Path,
     force: bool = False,
     batch_size: int = 16,
@@ -415,11 +415,14 @@ def extract_clip_features(
         device=device
     )
 
-    return build_feature_dict(
-        products_df=products_df,
-        asset_path=asset_path,
-        suffix_name=suffix
-    )
+    if products_df is not None:
+        return build_feature_dict(
+            products_df=products_df,
+            asset_path=asset_path,
+            suffix_name=suffix
+        )
+    else:
+        return None
 
 
 def process_one_asin(

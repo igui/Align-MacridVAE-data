@@ -4,12 +4,13 @@ import amazon_dataset
 
 dataset = 'Clothing_Shoes_and_Jewelry'
 asset_path = amazon_dataset.product_images_dir(dataset)
-products_df = amazon_dataset.products_df(dataset)
 
 print(f"Extracting into {asset_path}")
 
 feature_extraction_image.extract_clip_features(
-    products_df=products_df,
+    # Not necessary to extract features. Only necessary to save the "mean"
+    # product image
+    products_df=None,
     asset_path=asset_path,
     batch_size=16)
 
