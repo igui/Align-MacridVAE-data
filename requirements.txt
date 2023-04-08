@@ -27,3 +27,7 @@ ftfy
 regex
 tqdm
 CLIP @ git+https://github.com/openai/CLIP.git
+
+# For searching with ElasticSearch
+elasticsearch-dsl
+elasticsearch

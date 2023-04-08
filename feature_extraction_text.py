@@ -1,11 +1,12 @@
 from typing import Dict, Optional
 
+import clip
+import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import torch
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
-
 
 # How many products do we store in a single batch
 PRODUCT_BATCH_SIZE=2
@@ -62,7 +63,7 @@ def tokenize_products(
         return_tensors='pt'
     )
 
-def extract_text_features(
+def extract_bert_text_features(
     df: pd.DataFrame, device: Optional['str'] = None
 ) -> Dict[str, npt.NDArray]:
     """
@@ -101,6 +102,37 @@ def extract_text_features(
                 key = batch_asin[idx]
                 extracted_features[key] = mean_pooled[:,idx].numpy(force=True)
 
+            progress.update(len(batch))
+
+    return extracted_features
+
+
+def extract_clip_text_features(
+    df: pd.DataFrame, device: Optional['str'] = None
+) -> Dict[str, npt.NDArray]:
+    if device is None:
+        device = get_default_device()
+    model, _preprocess = clip.load('ViT-L/14', device)
+
+    extracted_features: Dict[str, npt.NDArray] = {}
+
+    with tqdm(total=len(df), unit='product', unit_scale=True, smoothing=1e-2) as progress:
+        for batch in chunker(df, PRODUCT_BATCH_SIZE):
+            categories = batch['category'].apply(
+                    lambda categories: ' '.join(categories)
+                )
+            fallback = batch['description'].fillna(categories)
+            texts = batch['title'].fillna(fallback)
+            batch_tokenized = clip.tokenize(texts.to_list(), truncate=True)
+            batch_tokenized = batch_tokenized.to(device)
+
+            with torch.no_grad():
+                batch_encoded_tensor = model.encode_text(batch_tokenized)
+
+            batch_encoded = batch_encoded_tensor.numpy(force=True)
+            batch_encoded = batch_encoded.astype(np.float32)
+
+            extracted_features.update(zip(batch['asin'], batch_encoded))
             progress.update(len(batch))
 
     return extracted_features
