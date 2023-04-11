@@ -13,6 +13,7 @@ __pycache__
 
 # This directory can be huge
 data/amazon
+data/amazon-old
 
 # Only Generated data goes here
 data/DMRL-*
