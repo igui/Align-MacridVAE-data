@@ -17,13 +17,14 @@ import pandas as pd
 import requests
 import tqdm
 import urllib3
-from sqlalchemy import (Boolean, Column, Date, Float, ForeignKey, Integer,
+from requests import ConnectionError
+from sqlalchemy import (Boolean, Column, Date, Float, ForeignKey, Integer, Select,
                         String, create_engine, delete, event, func, select,
-                        text)
+                        text, update)
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (DeclarativeBase, Session, declarative_mixin,
-                            relationship)
+                            relationship, aliased)
 from sqlalchemy.schema import CreateIndex, DropIndex, DropTable
 from sqlalchemy.sql.functions import GenericFunction
 
@@ -124,6 +125,7 @@ class ProductImage(Base):
 
     id = Column(Integer, primary_key=True)
     url = Column(String(), nullable=False, index=True)
+    main = Column(Boolean(), nullable=False, default=False)
     slug = Column(String(), index=True)
 
     product_id = Column(ForeignKey("product.id"))
@@ -230,12 +232,9 @@ def set_sqlite_pragma(dbapi_connection, _connection_record):
     """
     This hook allows using foreign keys ALL the time when using the Database
     https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#foreign-key-support
-
-    Also, use the "unsafe" but faster memory journal mode
     """
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA journal_mode=MEMORY")
     cursor.close()
 
 
@@ -305,6 +304,9 @@ def product_title_cleaned(title: Optional[str]) -> Optional[str]:
     return title
 
 
+def get_image_urls(product: Dict) -> List[str]:
+    return product.get('imageURL', [])
+
 def process_product_chunk(
         chunk: List[Tuple[Dict, int]],
         asins: Set[int],
@@ -360,7 +362,7 @@ def process_product_chunk(
             'product_id': obj_id
         }
         for obj, obj_id in inserted_objs
-        for url in obj.get('image', [])
+        for url in get_image_urls(obj)
     ]
     product_categories = [
         {'name': name, 'product_id': obj_id}
@@ -608,89 +610,21 @@ def get_image_url(slug: str, max_dimension: int = 400) -> str:
     return f'{IMAGE_PREFIX}{slug}._SS{max_dimension}_.jpg'
 
 
-def download_an_image(args: Tuple[str, Path, Any]) -> Optional[Path]:
-    slug, dest_dir, thread_data = args
-    url = get_image_url(slug)
-
-    resp = thread_data.session.get(url, stream=True)
-    dest = dest_dir / f'{slug}.jpg'
-
-    if resp.status_code == 404:
-        # Create the file as empty (so we don't download it twice)
-        dest.open('wb').close()
-        return
-
-    resp.raise_for_status()
-
-    try:
-        with dest.open('wb') as dest_file:
-            for chunk in resp.iter_content(chunk_size=COPY_BUFSIZE):
-                dest_file.write(chunk)
-    except KeyboardInterrupt:
-        # Do not keep files if we are cancelling downloads
-        dest.unlink(missing_ok=True)
-        raise
-
-    return dest
-
-
-def download_images(dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES):
-    dest_dir = product_images_dir(dataset)
-    dest_dir.mkdir(exist_ok=True)
-
-    existing_slugs = {
-        existing_file.stem
-        for existing_file in dest_dir.glob('*.jpg')
-    }
-
-    with create_session(dataset) as session:
-        stmt = (
-            select(ProductImage.slug.distinct())
-            .where(ProductImage.slug.isnot(None))
-        )
-        pending_slugs = set([])
-        for slug in session.execute(stmt).scalars():
-            assert slug is not None
-            if slug not in existing_slugs:
-                pending_slugs.add(slug)
-
-    if not pending_slugs:
-        logging.info('No images to download :)')
-        return
-
-    # Use a thread-exclussive request session to speed up image download
-    thread_storage = threading.local()
-    def init_thread_storage():
-        thread_storage.session = requests.Session()
-
-    pool = ThreadPool(processes=max_workers, initializer=init_thread_storage)
-    with tqdm.tqdm(unit_scale=True, total=len(pending_slugs), unit='image',
-                   smoothing=0.01) as progress:
-        errors = 0
-        args = [
-            (slug, get_image_url(slug), dest_dir, thread_storage)
-            for slug in pending_slugs
-        ]
-        for res in pool.imap_unordered(download_an_image, args):
-            if res is None:
-                errors += 1
-                progress.set_postfix_str(
-                    f'HTTP404 errors {errors}', refresh=False
-                )
-            progress.update()
-
-
-def get_alternative_image_url(asin: str, max_dimension: int = 400) -> str:
+def image_webservice_url(asin: str, max_dimension: int = 400) -> str:
     return f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&MarketPlace=US&ASIN={asin}&ServiceVersion=20070822&ID=AsinImage&WS=1&Format=SS{max_dimension}"
 
 
-def download_alternative_image(
-    asin: str,
-    session: requests.Session,
-    dest_dir: Path
-) -> Tuple[str, str]:
-    url = get_alternative_image_url(asin)
-    resp = session.get(url, allow_redirects=True, stream=True)
+def save_image_webservice(args: Tuple[int, str, str, Any]) -> Tuple[str, Optional[str]]:
+    product_id, asin, dataset, thread_data = args
+    url = image_webservice_url(asin)
+    try:
+        resp = thread_data.session.get(url, allow_redirects=True, stream=True)
+    except ConnectionError as ex:
+        # Some name resolution failure or stuff like that
+        return str(ex), None
+
+    if resp.status_code == 404: # Not found
+        return url, None
     resp.raise_for_status()
 
     # After redirect
@@ -699,48 +633,180 @@ def download_alternative_image(
     if not slug:
         return url, None
 
+    dest_dir = product_images_dir(dataset)
+    dest_dir.mkdir(exist_ok=True)
+
     dest = dest_dir / f'{slug}.jpg'
     with dest.open('wb') as dest_file:
         for chunk in resp.iter_content(chunk_size=COPY_BUFSIZE):
             dest_file.write(chunk)
 
+    with create_session(dataset) as sql_session:
+        sql_session.add(ProductImage(
+            product_id=product_id, url=url, slug=slug, main=True
+        ))
+        sql_session.commit()
+
     return url, slug
 
 
-def add_image_for_remaining_products(dataset: str):
-    dest_dir = product_images_dir(dataset)
-    def has_valid_images(row: Any) -> Path:
-        return any(
-            slug
-            for slug in row['image_slug']
-            if os.path.getsize(os.path.join(dest_dir, f'{slug}.jpg')) > 0
+def products_with_no_images_query() -> Select:
+    join_table = Product.__table__.join(
+        ProductImage.__table__,
+        (Product.id == ProductImage.product_id) & (ProductImage.main == True),
+        isouter=True
+    )
+    query = select(Product).select_from(join_table)
+    return query.where(ProductImage.id == None).distinct()
+
+def products_with_no_main_image_df(dataset: str) -> pd.DataFrame:
+    with create_session(dataset) as session:
+        return pd.read_sql_query(
+            products_with_no_images_query(),
+            session.bind.connect(),
+            index_col='id'
         )
 
-    df = products_df(dataset)
-    no_images = df.loc[~df.apply(has_valid_images, axis=1)]
+def download_main_product_images_webservice(
+    dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES
+):
+    # This includes products with NO MAIN image and products with no image at all
+    no_images = products_with_no_main_image_df(dataset)
 
-    with tqdm.tqdm(total=len(no_images), unit='image') as progress, \
-        create_session(dataset) as sql_session, \
-        requests.Session() as requests_session:
-            errors = 0
-            for row in no_images.itertuples():
-                url, slug = download_alternative_image(
-                    asin=row.asin, session=requests_session, dest_dir=dest_dir
+    # Use a thread-exclussive request session to speed up image download
+    thread_storage = threading.local()
+    def init_thread_storage():
+        thread_storage.session = requests.Session()
+
+    pool = ThreadPool(processes=max_workers, initializer=init_thread_storage)
+
+    with tqdm.tqdm(total=len(no_images), unit='image', smoothing=0.01) as progress:
+        errors = 0
+        args = [
+            (row.Index, row.asin, dataset, thread_storage)
+            for row in no_images.itertuples()
+        ]
+        for url, slug in pool.imap_unordered(save_image_webservice, args):
+            if not slug:
+                errors += 1
+                progress.set_postfix_str(
+                    f'Errors {errors} {url}',
+                    refresh=False
                 )
+            progress.update()
 
-                if slug:
-                    sql_session.add(ProductImage(
-                        product_id=row.Index, url=url, slug=slug
-                    ))
-                    sql_session.commit()
-                else:
-                    errors += 1
-                    progress.set_postfix_str(
-                        f'Errors {errors} {url}',
-                        refresh=False
-                    )
-                progress.update()
 
+def save_image_heuristic(
+    args: Tuple[pd.DataFrame, str, Any]
+) -> Tuple[int, Optional[int]]:
+    image_group, dataset, thread_data = args
+
+    dest_dir = product_images_dir(dataset)
+
+    # sort_index ensures the first image (I guess the first image is the one that counts
+    # gets tried first)
+    for image_id, image in image_group.sort_index().iterrows():
+        product_id = image['product_id']
+        slug = image['slug']
+
+        if slug is None:
+            continue # Not interesting
+
+        url = get_image_url(image['slug'])
+
+        resp = thread_data.session.get(url, stream=True)
+        dest = dest_dir / f'{slug}.jpg'
+
+        if resp.status_code == 404:
+            continue
+
+        resp.raise_for_status()
+
+        try:
+            # We can retrieve the image :)
+            with dest.open('wb') as dest_file:
+                for chunk in resp.iter_content(chunk_size=COPY_BUFSIZE):
+                    dest_file.write(chunk)
+
+            # We can update the image and mark it as Main!
+            with create_session(dataset) as sql_session:
+                update_stmt = update(ProductImage)
+                update_stmt = update_stmt.where(ProductImage.id == image_id)
+                update_stmt = update_stmt.values(main=True)
+                sql_session.execute(update_stmt)
+                sql_session.commit()
+
+                return product_id, image_id
+
+        except KeyboardInterrupt:
+            # Do not keep files if we are cancelling downloads
+            dest.unlink(missing_ok=True)
+            raise
+
+    return product_id, None
+
+
+def download_main_image_heuristic(
+    dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES
+):
+    """
+    Add images for remaining products using the first product image.
+    it can have several false positives, though
+    """
+    product_ids = products_with_no_images_query().with_only_columns(Product.id)
+    product_images = select(ProductImage).where(
+        ProductImage.product_id.in_(product_ids)
+    )
+
+    with create_session(dataset) as session:
+        product_images = pd.read_sql_query(product_images,
+            session.bind.connect(),
+            index_col='id'
+        )
+
+    # All those product should not have main images
+    assert len(product_images.loc[product_images['main'] == True]) == 0
+
+    no_images_by_product = product_images.groupby('product_id')
+
+
+    # Use a thread-exclussive request session to speed up image download
+    thread_storage = threading.local()
+    def init_thread_storage():
+        thread_storage.session = requests.Session()
+
+    pool = ThreadPool(processes=max_workers, initializer=init_thread_storage)
+
+    args = [
+        (image_group, dataset, thread_storage)
+        for _, image_group in no_images_by_product
+    ]
+    with tqdm.tqdm(
+        total=len(no_images_by_product), unit='product', smoothing=0.01
+    ) as progress:
+        errors = 0
+        for product_id, image_id in pool.imap_unordered(save_image_heuristic, args):
+            if image_id is None:
+                errors += 1
+                progress.set_postfix_str(
+                    f'Errors {errors} {product_id=}', refresh=False
+                )
+            progress.update()
+
+
+def check_all_images_are_ok(dataset: str):
+    product_images = product_images_df(dataset)
+
+    # Slugs stored in the DB which we will expect
+    main_slugs = product_images.loc[product_images['main'] == True]['slug']
+
+    # Slugs in the images folder
+    downloaded_slugs = [
+        p.stem
+        for p in product_images_dir(dataset).glob('*.jpg')
+    ]
+
+    assert set(main_slugs) == set(downloaded_slugs)
 
 
 def process_review_chunk(
@@ -1045,6 +1111,34 @@ def delete_products_with_few_reviews(session: Session, min_amount: int):
             progress.update(len(ids))
 
     return count_del
+
+def delete_non_relevant_images(dataset: str):
+    """Delete duplicate and non main images"""
+    with create_session(dataset) as session:
+        # Non main are not important
+        print('Deleting non main product images')
+        delete_non_main = delete(ProductImage).where(ProductImage.main != True)
+        session.execute(delete_non_main)
+
+        # Products with duplicate slug and product id, and main
+        # should not happen but we delete them anyway
+        print('Getting duplicated product images')
+        product_image2 = aliased(ProductImage)
+        duplicate_product_images_ids = select(ProductImage.id).where(
+            (ProductImage.id > product_image2.id) &
+            (ProductImage.product_id == product_image2.product_id)
+        ).distinct()
+        product_ids = [
+            row[0]
+            for row in session.execute(duplicate_product_images_ids).all()
+        ]
+
+        print('Deleting duplicated')
+        delete_duplicated = delete(ProductImage).where(
+            ProductImage.id.in_(product_ids)
+        )
+        session.execute(delete_duplicated)
+        session.commit()
 
 
 def vacuum_dataset(dataset: str):
