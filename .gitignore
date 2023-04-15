@@ -1,5 +1,4 @@
 # Glove stuff
-data/glove.840B.300d.txt
 .ipynb_checkpoints/*
 
 # Virtualenvs
@@ -8,16 +7,12 @@ data/glove.840B.300d.txt
 # Python Cache
 __pycache__
 
-# PyCharm
+# PyCharm and configuration files
 .idea
+.env
 
 # This directory can be huge
-data/amazon
-data/amazon-old
-
-# Only Generated data goes here
-data/DMRL-*
-data/SEM-MacridVAE-*
+data
 
 # Some temp files here
 assets

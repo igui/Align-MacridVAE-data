@@ -47,6 +47,18 @@ def mean_pool(
     return hidden_masked.sum(axis=1) / seq_length
 
 
+def cls_pool(
+    tokens: torch.Tensor,        # batch_size x seq_size
+    hidden_states: torch.Tensor, #
+    tokenizer: PreTrainedTokenizerBase
+) -> torch.Tensor:
+    """Output the CLS token"""
+    assert hidden_states.dim() == 3, "We work only in batches"
+    assert (tokens[:,0] == tokenizer.cls_token_id).all(), "First tokens must be CLS"
+
+    # size: hidden_state_size x batch_size (for compatibility with the mean_pool)
+    return hidden_states[:,0].T
+
 def tokenize_products(
     df: pd.DataFrame,
     tokenizer: PreTrainedTokenizerBase
@@ -73,14 +85,8 @@ def extract_bert_text_features(
     if device is None:
         device = get_default_device()
 
-    tokenizer = BertTokenizer.from_pretrained(
-        'bert-large-cased',
-        #local_files_only=True
-    )
-    model = BertModel.from_pretrained(
-        "bert-large-cased",
-        #local_files_only=True
-    )
+    tokenizer = BertTokenizer.from_pretrained('bert-large-cased')
+    model = BertModel.from_pretrained("bert-large-cased")
 
     extracted_features: Dict[str, npt.NDArray] = {}
     model = model.to(device)
@@ -92,7 +98,7 @@ def extract_bert_text_features(
             encoded.to(device)
             output = model(**encoded)
 
-            mean_pooled = mean_pool(
+            pooled = cls_pool(
                 tokens=encoded['input_ids'],
                 hidden_states=output.last_hidden_state,
                 tokenizer=tokenizer
@@ -100,7 +106,7 @@ def extract_bert_text_features(
 
             for idx in range(len(batch)):
                 key = batch_asin[idx]
-                extracted_features[key] = mean_pooled[:,idx].numpy(force=True)
+                extracted_features[key] = pooled[:,idx].numpy(force=True)
 
             progress.update(len(batch))
 
