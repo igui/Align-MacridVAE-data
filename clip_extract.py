@@ -2,7 +2,7 @@ from pathlib import Path
 import feature_extraction_image
 import amazon_dataset
 
-dataset = 'Clothing_Shoes_and_Jewelry'
+dataset = 'Home_and_Kitchen'
 asset_path = amazon_dataset.product_images_dir(dataset)
 
 print(f"Extracting into {asset_path}")

@@ -5,6 +5,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import torch
+from bs4 import BeautifulSoup
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
 
@@ -65,7 +66,8 @@ def tokenize_products(
 ) -> torch.Tensor:
     """Makes a Tensor from the input string"""
     # To avoid joinig NAs with strings
-    full_texts = df['title'].fillna('') + ' ' +  df['description'].fillna('')
+    full_texts = df['title'].fillna('') + ' ' +  df['description'].fillna('').apply(lambda x: BeautifulSoup(x).get_text())
+    full_texts = full_texts.apply(lambda x: x[:MAX_SEQ_SIZE])
 
     return tokenizer(
         full_texts.to_list(),

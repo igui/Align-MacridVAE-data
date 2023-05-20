@@ -305,7 +305,7 @@ def product_title_cleaned(title: Optional[str]) -> Optional[str]:
 
 
 def get_image_urls(product: Dict) -> List[str]:
-    return product.get('imageURL', [])
+    return product.get('image', [])
 
 def process_product_chunk(
         chunk: List[Tuple[Dict, int]],
@@ -375,20 +375,9 @@ def process_product_chunk(
         for name in obj.get('feature', [])
     ]
 
-    # The ones that are plain. Unused in our work
+    # They are unused :)
     related_products = []
-
-    technical_details = [
-        {
-            'name': key,
-            'value': value,
-            'kind': technical_detail_key,
-            'product_id': obj_id
-        }
-        for obj, obj_id in inserted_objs
-        for technical_detail_key in ('tech1', 'tech2')
-        for key, value in obj.get(technical_detail_key, {}).items()
-    ]
+    technical_details = []
 
     # If any of the products fail, then we have to
     session.bulk_insert_mappings(ProductImage, product_images)
