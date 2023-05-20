@@ -375,21 +375,8 @@ def process_product_chunk(
         for name in obj.get('feature', [])
     ]
 
-    # The ones that are plain. Those are list of ASINs
-    related_products = [
-        {'asin': asin, 'kind': rel_product_key, 'product_id': obj_id}
-        for obj, obj_id in inserted_objs
-        for rel_product_key in ('also_view', 'also_buy')
-        for asin in obj.get(rel_product_key, [])
-    ]
-
-    # The ones that are a dictionary. Those are list of dictionaries.
-    related_products += [
-        {'asin': rel['asin'], 'kind': 'similar_item', 'product_id': obj_id}
-        for obj, obj_id in inserted_objs
-        for rel in obj.get('similar_item', [])
-        if rel['asin']
-    ]
+    # The ones that are plain. Unused in our work
+    related_products = []
 
     technical_details = [
         {
