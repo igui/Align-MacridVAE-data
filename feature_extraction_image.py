@@ -1,10 +1,11 @@
+import argparse
 import gzip
 import logging
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, Future
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import pandas as pd
 import numpy as np
@@ -21,6 +22,7 @@ from torchvision.models.feature_extraction import create_feature_extractor
 from tqdm import tqdm
 from torchvision.transforms import InterpolationMode
 import clip
+import amazon_dataset
 
 def setup_logging() -> logging.Logger:
     res = logging.getLogger('feature_extraction')
@@ -501,3 +503,36 @@ def build_feature_dict(
 
     logger.info(f'Products with no values: {nan_values}')
     return extracted_features
+
+
+def parse_args() -> argparse.Namespace:
+    args = argparse.ArgumentParser()
+    args.add_argument('dataset', type=str)
+    args.add_argument('extractor', type=str, choices=['vit', 'clip', 'alexnet'])
+
+    return args.parse_args()
+
+def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
+    asset_path = amazon_dataset.product_images_dir(dataset)
+
+    print(f"Extracting into {asset_path} using {extractor}")
+
+    products_df = amazon_dataset.products_df(dataset)
+
+    if extractor == 'vit':
+        extract_func = extract_vit_features
+    elif extractor == 'clip':
+        extract_func = extract_clip_features
+    elif extractor == 'alexnet':
+        extract_func = extract_alexnet_features
+
+    extract_func(
+        products_df=products_df,
+        asset_path=asset_path,
+        batch_size=16)
+
+    print(f'Done! Features available in {asset_path}')
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args.dataset, args.extractor)
