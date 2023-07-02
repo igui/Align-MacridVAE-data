@@ -8,12 +8,12 @@ asset_path = amazon_dataset.product_images_dir(dataset)
 
 print(f"Loading products")
 
-products_df = amazon_dataset.products_df(dataset)
+products_df = amazon_dataset.items_df(dataset)
 
 print(f"Extracting into {asset_path}")
 
 vit_features = feature_extraction_image.extract_vit_features(
-    products_df, 
+    products_df,
     asset_path=asset_path,
     batch_size=16
 )

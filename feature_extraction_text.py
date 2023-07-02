@@ -10,7 +10,7 @@ from tqdm import tqdm
 from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
 
 # How many products do we store in a single batch
-PRODUCT_BATCH_SIZE=2
+ITEM_BATCH_SIZE=2
 # How many sequences do we store in a single sample
 MAX_SEQ_SIZE = 256
 
@@ -60,14 +60,21 @@ def cls_pool(
     # size: hidden_state_size x batch_size (for compatibility with the mean_pool)
     return hidden_states[:,0].T
 
+
+def get_full_texts(df: pd.DataFrame):
+    res = df['title'].fillna('') + ' ' +  df['description'].fillna('')
+    res = res.apply(
+        lambda x: BeautifulSoup(x, features='html.parser').get_text()
+    )
+    res = res.apply(lambda x: x[:MAX_SEQ_SIZE])
+    return res
+
 def tokenize_products(
     df: pd.DataFrame,
     tokenizer: PreTrainedTokenizerBase
 ) -> torch.Tensor:
     """Makes a Tensor from the input string"""
-    # To avoid joinig NAs with strings
-    full_texts = df['title'].fillna('') + ' ' +  df['description'].fillna('').apply(lambda x: BeautifulSoup(x).get_text())
-    full_texts = full_texts.apply(lambda x: x[:MAX_SEQ_SIZE])
+    full_texts = get_full_texts(df)
 
     return tokenizer(
         full_texts.to_list(),
@@ -78,10 +85,11 @@ def tokenize_products(
     )
 
 def extract_bert_text_features(
-    df: pd.DataFrame, device: Optional['str'] = None
+    df: pd.DataFrame,
+    device: Optional['str'] = None
 ) -> Dict[str, npt.NDArray]:
     """
-    Returns a dictionary (asin -> np.ndarray) with the textual features per
+    Returns a dictionary (item_id -> np.ndarray) with the textual features per
     product
     """
     if device is None:
@@ -93,9 +101,9 @@ def extract_bert_text_features(
     extracted_features: Dict[str, npt.NDArray] = {}
     model = model.to(device)
 
-    with tqdm(total=len(df), unit='product', unit_scale=True, smoothing=1e-2) as progress:
-        for batch in chunker(df, PRODUCT_BATCH_SIZE):
-            batch_asin = batch['asin'].to_list()
+    with tqdm(total=len(df), unit='item', unit_scale=True, smoothing=1e-2) as progress:
+        for batch in chunker(df, ITEM_BATCH_SIZE):
+            batch_item_id = batch['item_id'].to_list()
             encoded = tokenize_products(batch, tokenizer)
             encoded.to(device)
             output = model(**encoded)
@@ -107,7 +115,7 @@ def extract_bert_text_features(
             )
 
             for idx in range(len(batch)):
-                key = batch_asin[idx]
+                key = batch_item_id[idx]
                 extracted_features[key] = pooled[:,idx].numpy(force=True)
 
             progress.update(len(batch))
@@ -125,12 +133,9 @@ def extract_clip_text_features(
     extracted_features: Dict[str, npt.NDArray] = {}
 
     with tqdm(total=len(df), unit='product', unit_scale=True, smoothing=1e-2) as progress:
-        for batch in chunker(df, PRODUCT_BATCH_SIZE):
-            categories = batch['category'].apply(
-                    lambda categories: ' '.join(categories)
-                )
-            fallback = batch['description'].fillna(categories)
-            texts = batch['title'].fillna(fallback)
+        for batch in chunker(df, ITEM_BATCH_SIZE):
+            texts = get_full_texts(df)
+
             batch_tokenized = clip.tokenize(texts.to_list(), truncate=True)
             batch_tokenized = batch_tokenized.to(device)
 
@@ -140,7 +145,7 @@ def extract_clip_text_features(
             batch_encoded = batch_encoded_tensor.numpy(force=True)
             batch_encoded = batch_encoded.astype(np.float32)
 
-            extracted_features.update(zip(batch['asin'], batch_encoded))
+            extracted_features.update(zip(batch['item_id'], batch_encoded))
             progress.update(len(batch))
 
     return extracted_features

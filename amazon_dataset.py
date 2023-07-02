@@ -1171,7 +1171,7 @@ def split_line_str(s: Optional[str], separator: str) -> List[str]:
     else:
         return s.split(separator)
 
-def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
+def items_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
     # We use as sparator something we don't use anywhere else (ESCAPE (U+001B))
     sep = '\x1b'
 
@@ -1225,6 +1225,9 @@ def products_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
 
         for col in ['image_url', 'image_slug', 'feature', 'category']:
             df[col] = df[col].apply(split_line_str, args=(sep,))
+
+        # For compatibility with other datasets
+        df['item_id'] = df['asin']
 
         return df
 

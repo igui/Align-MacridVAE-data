@@ -517,7 +517,7 @@ def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
 
     print(f"Extracting into {asset_path} using {extractor}")
 
-    products_df = amazon_dataset.products_df(dataset)
+    products_df = amazon_dataset.items_df(dataset)
 
     if extractor == 'vit':
         extract_func = extract_vit_features
