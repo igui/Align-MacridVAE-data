@@ -1,3 +1,5 @@
+import argparse
+from pathlib import Path
 from typing import Dict, Optional
 
 import clip
@@ -134,7 +136,7 @@ def extract_clip_text_features(
 
     with tqdm(total=len(df), unit='product', unit_scale=True, smoothing=1e-2) as progress:
         for batch in chunker(df, ITEM_BATCH_SIZE):
-            texts = get_full_texts(df)
+            texts = get_full_texts(batch)
 
             batch_tokenized = clip.tokenize(texts.to_list(), truncate=True)
             batch_tokenized = batch_tokenized.to(device)

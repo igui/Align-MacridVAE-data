@@ -4,7 +4,7 @@ import amazon_dataset
 import numpy as np
 
 dataset = 'Clothing_Shoes_and_Jewelry'
-asset_path = amazon_dataset.product_images_dir(dataset)
+asset_path = amazon_dataset.images_dir(dataset)
 
 print(f"Loading products")
 

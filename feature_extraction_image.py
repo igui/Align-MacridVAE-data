@@ -23,6 +23,7 @@ from tqdm import tqdm
 from torchvision.transforms import InterpolationMode
 import clip
 import amazon_dataset
+import movielens_dataset
 
 def setup_logging() -> logging.Logger:
     res = logging.getLogger('feature_extraction')
@@ -343,7 +344,7 @@ def test_extract_one_image(
 
 
 def extract_alexnet_features(
-    products_df: pd.DataFrame,
+    items_df: pd.DataFrame,
     asset_path: Path,
     force: bool = False,
     batch_size: int = 1024,
@@ -363,14 +364,14 @@ def extract_alexnet_features(
     )
 
     return build_feature_dict(
-        products_df=products_df,
+        items_df=items_df,
         asset_path=asset_path,
         suffix_name=suffix
     )
 
 
 def extract_vit_features(
-    products_df: pd.DataFrame,
+    items_df: pd.DataFrame,
     asset_path: Path,
     force: bool = False,
     batch_size: int = 16,
@@ -391,13 +392,13 @@ def extract_vit_features(
     )
 
     return build_feature_dict(
-        products_df=products_df,
+        items_df=items_df,
         asset_path=asset_path,
         suffix_name=suffix
     )
 
 def extract_clip_features(
-    products_df: Optional[pd.DataFrame],
+    items_df: Optional[pd.DataFrame],
     asset_path: Path,
     force: bool = False,
     batch_size: int = 16,
@@ -417,9 +418,9 @@ def extract_clip_features(
         device=device
     )
 
-    if products_df is not None:
+    if items_df is not None:
         return build_feature_dict(
-            products_df=products_df,
+            items_df=items_df,
             asset_path=asset_path,
             suffix_name=suffix
         )
@@ -427,8 +428,8 @@ def extract_clip_features(
         return None
 
 
-def process_one_asin(
-    asin: str, image_slugs: List[str], asset_path: str, suffix_name
+def process_one_item(
+    item_id: str, image_slugs: List[str], asset_path: str, suffix_name
 ) -> Tuple[str, npt.NDArray]:
     # Empty images have no features
     image_slugs = [
@@ -446,16 +447,16 @@ def process_one_asin(
     else:
         mean_feature = all_features.mean(axis=0)
 
-    return (asin, mean_feature)
+    return (item_id, mean_feature)
 
 
 def build_feature_dict(
-    products_df: pd.DataFrame,
+    items_df: pd.DataFrame,
     asset_path: Path,
     suffix_name: str,
 ) -> Dict[str, npt.NDArray]:
     """
-    Returns a dictionary (asin -> np.ndarray) with the image features per
+    Returns a dictionary (item_id -> np.ndarray) with the image features per
     product.
     This relies on having executed extract_vit_features() or
     extract_alexnet_features() before
@@ -465,7 +466,7 @@ def build_feature_dict(
 
     with tqdm(
         desc='Building feature dict',
-        total=len(products_df),
+        total=len(items_df),
         unit='product',
         unit_scale=True,
         smoothing=0.01
@@ -473,19 +474,19 @@ def build_feature_dict(
         str_asset_path = str(asset_path.absolute())
         futures = [
             executor.submit(
-                process_one_asin,
-                asin=row.asin,
+                process_one_item,
+                item_id=row.item_id,
                 image_slugs=row.image_slug,
                 asset_path=str_asset_path,
                 suffix_name=suffix_name
             )
-            for row in products_df.itertuples()
+            for row in items_df.itertuples()
         ]
 
         try:
             for f in as_completed(futures):
-                asin, mean_feature = f.result()
-                extracted_features[asin] = mean_feature
+                item_id, mean_feature = f.result()
+                extracted_features[item_id] = mean_feature
                 progress.update()
         except KeyboardInterrupt:
             executor.shutdown(wait=False)
@@ -496,12 +497,12 @@ def build_feature_dict(
 
     # We have to transform nans to some zero values
     nan_values = 0
-    for asin in extracted_features:
-        if np.isnan(extracted_features[asin]).any():
+    for item_id in extracted_features:
+        if np.isnan(extracted_features[item_id]).any():
             nan_values += 1
-            extracted_features[asin] = nan_substitute
+            extracted_features[item_id] = nan_substitute
 
-    logger.info(f'Products with no values: {nan_values}')
+    logger.info(f'Items with no values: {nan_values}')
     return extracted_features
 
 
@@ -512,26 +513,63 @@ def parse_args() -> argparse.Namespace:
 
     return args.parse_args()
 
-def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
-    asset_path = amazon_dataset.product_images_dir(dataset)
+def get_asset_path(dataset: str):
+    if dataset == 'ml-1m':
+        return movielens_dataset.IMG_FOLDER
+    else:
+        return amazon_dataset.images_dir(dataset)
 
+def get_extractor_func(extractor: str):
+    if extractor == 'vit':
+        return extract_vit_features
+    elif extractor == 'clip':
+        return extract_clip_features
+    elif extractor == 'alexnet':
+        return extract_alexnet_features
+
+    raise ValueError(f'Unknown extractor {extractor}')
+
+def get_extractor_filepart(extractor: str):
+    if extractor == 'vit':
+        return 'vit'
+    elif extractor == 'clip':
+        return 'clipimage'
+    elif extractor == 'alexnet':
+        return 'alexnet'
+
+    raise ValueError(f'Unknown extractor {extractor}')
+
+def get_items_df(dataset: str):
+    if dataset == 'ml-1m':
+        return movielens_dataset.items_df()
+    else:
+        return amazon_dataset.items_df(dataset)
+
+def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
+    asset_path = get_asset_path(dataset)
     print(f"Extracting into {asset_path} using {extractor}")
 
-    products_df = amazon_dataset.items_df(dataset)
+    items_df = get_items_df(dataset)
+    print(f"Using dataset {dataset} with {len(items_df)} items")
 
-    if extractor == 'vit':
-        extract_func = extract_vit_features
-    elif extractor == 'clip':
-        extract_func = extract_clip_features
-    elif extractor == 'alexnet':
-        extract_func = extract_alexnet_features
+    extractor_func = get_extractor_func(extractor)
+    print(f"Using extractor {extractor_func.__name__}")
+    extractor_file_path = get_extractor_filepart(extractor)
 
-    extract_func(
-        products_df=products_df,
+    extracted_features = extractor_func(
+        items_df=items_df,
         asset_path=asset_path,
         batch_size=16)
 
-    print(f'Done! Features available in {asset_path}')
+    if dataset == 'ml-1m':
+        base_folder = movielens_dataset.BASE_DATA_FOLDER
+    else:
+        base_folder = amazon_dataset.BASE_DATA_FOLDER
+
+    dest = base_folder / f'{dataset}_{extractor_file_path}_features.npz'
+    np.savez_compressed(dest, **extracted_features)
+
+    print(f'Done! Features available in {dest}')
 
 if __name__ == "__main__":
     args = parse_args()

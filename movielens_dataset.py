@@ -21,9 +21,6 @@ ML_1M_URL = 'https://files.grouplens.org/datasets/movielens/ml-1m.zip'
 # Generated links to from MovieLens movies IMDB
 ML_1M_IMDB = 'https://raw.githubusercontent.com/vectorsss/movielens_100k_1m_extension/main/data/ml-1m/links_artificial.csv'
 
-# Fallback CSV with images (low quality)
-ML_1M_CSV_IMAGES = 'https://raw.githubusercontent.com/antonsteenvoorden/ml1m-images/master/ml1m_images.csv'
-
 DONWLOAD_PROCESSES = 8
 
 IMDB_DATA_FILE = BASE_DATA_FOLDER / 'imdb_data.pkl'
@@ -116,6 +113,20 @@ def items_df() -> pd.DataFrame:
 
     # Add the item id for compatibility with other datasets
     result['item_id'] = result['movie_id'].astype(str)
+
+    # Add the image slug, when the image is available
+    result['image_slug'] = result['movie_id'].apply(lambda x: [ x ])
+
+    # Remove the image slug when the image is not available
+    missing_image = (
+        result['image_url'].isna() |
+        result['image_url'].str.endswith('imdb_logo.png')
+    )
+    missing_images_loc = result.loc[missing_image, 'image_slug']
+    result.loc[missing_image, 'image_slug'] = missing_images_loc.apply(
+        lambda _: []
+    )
+
     return result
 
 
@@ -252,6 +263,9 @@ def reviews_df() -> pd.DataFrame:
     )
     # Transform timestamp to datetime from epoch seconds
     result['timestamp'] = pd.to_datetime(result['timestamp'], unit='s')
+
+    # Rename movie_id to item_id for compatibility with other datasets
+    result.rename(columns={'movie_id': 'item_id'}, inplace=True)
 
     # It is much faster to read the pickle file directly instead of the DAT
     # file, so we save it for later

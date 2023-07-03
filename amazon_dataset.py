@@ -578,7 +578,7 @@ def get_image_slug(image_url: str) -> Optional[str]:
         return match.group("name")
 
 
-def product_images_dir(dataset: str) -> Path:
+def images_dir(dataset: str) -> Path:
     return BASE_DATA_FOLDER / f'{dataset}_product_images'
 
 
@@ -609,7 +609,7 @@ def save_image_webservice(args: Tuple[int, str, str, Any]) -> Tuple[str, Optiona
     if not slug:
         return url, None
 
-    dest_dir = product_images_dir(dataset)
+    dest_dir = images_dir(dataset)
     dest_dir.mkdir(exist_ok=True)
 
     dest = dest_dir / f'{slug}.jpg'
@@ -677,7 +677,7 @@ def save_image_heuristic(
 ) -> Tuple[int, Optional[int]]:
     image_group, dataset, thread_data = args
 
-    dest_dir = product_images_dir(dataset)
+    dest_dir = images_dir(dataset)
 
     # sort_index ensures the first image (I guess the first image is the one that counts
     # gets tried first)
@@ -779,7 +779,7 @@ def check_all_images_are_ok(dataset: str):
     # Slugs in the images folder
     downloaded_slugs = [
         p.stem
-        for p in product_images_dir(dataset).glob('*.jpg')
+        for p in images_dir(dataset).glob('*.jpg')
     ]
 
     assert set(main_slugs) == set(downloaded_slugs)
@@ -1161,7 +1161,14 @@ def reviews_df(dataset: str, limit: Optional[int] = None) -> pd.DataFrame:
             query = query.limit(100)
         stmt = query.statement
 
-    return pd.read_sql_query(stmt, session.bind.connect())
+    result = pd.read_sql_query(stmt, session.bind.connect())
+
+    # Add columns to be compatible with other datasets
+    result['user_id'] = result['reviewerID']
+    result['item_id'] = result['asin']
+    result['rating'] = result['overall']
+
+    return result
 
 
 def split_line_str(s: Optional[str], separator: str) -> List[str]:
