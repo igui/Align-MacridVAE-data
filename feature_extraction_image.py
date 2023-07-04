@@ -514,8 +514,8 @@ def parse_args() -> argparse.Namespace:
     return args.parse_args()
 
 def get_asset_path(dataset: str):
-    if dataset == 'ml-1m':
-        return movielens_dataset.IMG_FOLDER
+    if dataset.startswith('ml-'):
+        return movielens_dataset.images_dir(dataset)
     else:
         return amazon_dataset.images_dir(dataset)
 
@@ -540,8 +540,8 @@ def get_extractor_filepart(extractor: str):
     raise ValueError(f'Unknown extractor {extractor}')
 
 def get_items_df(dataset: str):
-    if dataset == 'ml-1m':
-        return movielens_dataset.items_df()
+    if dataset.startswith('ml-'):
+        return movielens_dataset.items_df(dataset)
     else:
         return amazon_dataset.items_df(dataset)
 
@@ -561,7 +561,7 @@ def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
         asset_path=asset_path,
         batch_size=16)
 
-    if dataset == 'ml-1m':
+    if dataset.startswith('ml-'):
         base_folder = movielens_dataset.BASE_DATA_FOLDER
     else:
         base_folder = amazon_dataset.BASE_DATA_FOLDER

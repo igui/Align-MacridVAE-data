@@ -10,6 +10,7 @@ scipy
 tqdm
 sqlalchemy
 jsonlines
+gdown
 
 # For feature extraction
 pandas
