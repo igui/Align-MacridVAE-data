@@ -28,6 +28,9 @@ DOWNLOAD_PROCESSES = 8
 SOME_UA = 'Mozilla/5.0 (Linux; Android 7.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Focus/1.0 Chrome/59.0.3029.83 Mobile Safari/537.36'
 
 
+MIN_IMAGE_SIZE = 1000
+MIN_REVIEW_COUNT = 5
+
 def download_file(
         url: str,
         dest_file: Path, show_progress = True,
@@ -75,39 +78,70 @@ def download_dataset(overwrite: bool = False):
 
 def process_dataset(max_workers=DOWNLOAD_PROCESSES, resume=True):
     download_dataset()
-    items_df = raw_items_df()
-    download_images(items_df, max_workers=max_workers, resume=resume)
-
-    # Filter out items that do not have an image
-    valid_images = [
-        (x.stem, x.stat().st_size >= 1000) for x in
-        IMAGE_FOLDER.glob('*.jpg')
-    ]
-    has_image = pd.Series(
-        [size for (_, size) in valid_images],
-        index=[isbn for (isbn, _) in valid_images]
+    print('Reading items...')
+    raw_items = raw_items_df()
+    print('Downloading images...')
+    image_sizes = download_images(
+        raw_items, max_workers=max_workers, resume=resume
     )
-    filtered_items = items_df.loc[has_image]
+    raw_items['image_size'] = image_sizes
+    raw_reviews = raw_reviews_df()
 
-    reviews_df = raw_reviews_df()
+    print('Filtering items and reviews...')
+    filtered_items, filtered_reviews = filter_items_and_reviews(
+        raw_items, raw_reviews
+    )
+
+    filtered_items.to_pickle(ITEMS_PROCESSED_FILE)
+    filtered_reviews.to_pickle(REVIEWS_PROCESSED_FILE)
+
+
+def filter_items_and_reviews(items_df, reviews_df):
+    # Filter out items that do not have an image
+    items_df = only_items_with_image(items_df)
 
     # Do not consider reviews for items that are not in the items_df
-    filtered_reviews = reviews_df.loc[
-        reviews_df['item_id'].isin(filtered_items.index)
+    reviews_df = reviews_df.loc[
+        reviews_df['item_id'].isin(items_df.index)
     ]
 
-    # Also, do not consider items that are not in the reviews_df
-    filtered_items = filtered_items.filter(
-        filtered_reviews['item_id'].unique(), axis='index'
+    # Filter out items with less than 5 reviews or not in items_df
+    reviews_df = only_with_enough_reviews(reviews_df)
+
+    # Do not consider items that are not in the reviews_df
+    items_df = items_df.filter(
+        reviews_df['item_id'].unique(), axis='index'
     )
 
+    return items_df, reviews_df
 
-    filtered_reviews.to_pickle(REVIEWS_PROCESSED_FILE)
-    filtered_items.to_pickle(ITEMS_PROCESSED_FILE)
+
+def only_items_with_image(items_df):
+    item_has_image = items_df.loc[items_df['image_size'] >= MIN_IMAGE_SIZE].index
+    return items_df.loc[item_has_image]
+
+
+def only_with_enough_reviews(reviews_df):
+    item_id_sizes = reviews_df.groupby('item_id').size()
+    items_with_enough_reviews = item_id_sizes.loc[item_id_sizes >= MIN_REVIEW_COUNT].index
+
+    # Filter out items with less than 5 reviews or not in items_df
+    reviews_df = reviews_df.loc[
+        reviews_df['item_id'].isin(items_with_enough_reviews)
+    ]
+
+    user_id_sizes = reviews_df.groupby('user_id').size()
+    users_with_enough_reviews = user_id_sizes.loc[user_id_sizes >= MIN_REVIEW_COUNT].index
+    reviews_df = reviews_df.loc[
+        reviews_df['user_id'].isin(users_with_enough_reviews)
+    ]
+
+    return reviews_df
 
 
 def items_df():
     return pd.read_pickle(ITEMS_PROCESSED_FILE)
+
 
 def raw_items_df():
     res = pd.read_csv(
@@ -123,6 +157,8 @@ def raw_items_df():
     res['description'] = None
     res['image_slug'] = res['ISBN'].apply(lambda x: [ x ])
     res.set_index('item_id', inplace=True)
+    # Just for compatibility with other datasets
+    res['item_id'] = res.index
     return res
 
 
@@ -173,7 +209,24 @@ def download_item_image(args: Tuple[str, str, threading.local]):
             if data:
                 f.write(data)
 
+    # Many images are missing or are single pixels. Truncate them
+    if dest_file.stat().st_size < 1000:
+        fp = open(f, 'wb')
+        fp.close()
+
     return isbn, dest_file
+
+
+def list_downloaded_images() -> pd.Series:
+    downloaded_images_arr = [
+        (x.stem, x.stat().st_size) for x in
+        IMAGE_FOLDER.glob('*.jpg')
+    ]
+    return pd.Series(
+        [size for (_, size) in downloaded_images_arr],
+        index=[isbn for (isbn, _) in downloaded_images_arr]
+    )
+
 
 def download_images(
     items: pd.DataFrame,
@@ -181,15 +234,17 @@ def download_images(
     resume=True
     ):
     IMAGE_FOLDER.mkdir(exist_ok=True)
-    downloaded_isbns = set()
-    if resume:
-        downloaded_isbns = set((
-            f.stem for f in IMAGE_FOLDER.glob('*.jpg')
-        ))
 
-    pending_items = items.loc[~items['ISBN'].isin(downloaded_isbns)]
+    local_images = list_downloaded_images()
+
+    if not resume:
+        for stem in local_images.index:
+            (IMAGE_FOLDER / f'{stem}.jpg').unlink()
+        local_images = pd.Series()
+
+    pending_items = items.loc[~items['ISBN'].isin(local_images.index)]
     if pending_items.empty:
-        return
+        return local_images
 
     # Use a thread-exclussive request session to speed up image download
     thread_storage = threading.local()
@@ -216,10 +271,7 @@ def download_images(
                 progress.set_postfix_str(
                     f'Errors {errors} {url=}', refresh=False
                 )
+            local_images[dest_file.stem] = dest_file.stat().st_size
             progress.update()
 
-    # Truncate images that are too small. They correspond to missing images
-    for f in IMAGE_FOLDER.glob('*.jpg'):
-        if f.stat().st_size < 1000:
-            fp = open(f, 'wb')
-            fp.close()
+    return local_images
