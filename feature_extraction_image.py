@@ -3,27 +3,32 @@ import gzip
 import logging
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed, Future
+from concurrent.futures import (Future, ProcessPoolExecutor,
+                                ThreadPoolExecutor, as_completed)
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
-import pandas as pd
+import clip
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import ImageReadMode, read_image
 from torchvision.models import (AlexNet_Weights, ViT_L_16_Weights, alexnet,
                                 vit_l_16)
 from torchvision.models.feature_extraction import create_feature_extractor
-from tqdm import tqdm
 from torchvision.transforms import InterpolationMode
-import clip
+from torchvision.transforms import functional as F
+from tqdm import tqdm
+
 import amazon_dataset
 import movielens_dataset
+import bookcrossing_dataset
 
 def setup_logging() -> logging.Logger:
     res = logging.getLogger('feature_extraction')
@@ -71,7 +76,6 @@ DEFAULT_TRANSFORM = square_resize(size=400, fill=255)
 
 def get_default_device() -> str:
     return ("cuda" if torch.cuda.is_available() else "cpu")
-
 
 class ImageFeatureExtractionDataset(Dataset):
     """Image dataset from a directory"""
@@ -146,7 +150,12 @@ class ImageFeatureExtractionDataset(Dataset):
 
         # We don't use pathlib here because is slower
         rel_path = os.path.join(self.root, filename)
-        img = read_image(rel_path, mode=ImageReadMode.RGB)
+
+        # use Image.open() instead of torchvision.io.read_image() because
+        # the latter does not support reading GIFs
+        original_img = Image.open(rel_path).convert('RGB')
+        img = F.pil_to_tensor(original_img)
+
         if self.device:
             img = img.to(device=self.device)
         if self.transform:
@@ -516,6 +525,8 @@ def parse_args() -> argparse.Namespace:
 def get_asset_path(dataset: str):
     if dataset.startswith('ml-'):
         return movielens_dataset.images_dir(dataset)
+    elif dataset == 'bookcrossing':
+        return bookcrossing_dataset.IMAGE_FOLDER
     else:
         return amazon_dataset.images_dir(dataset)
 
@@ -542,8 +553,20 @@ def get_extractor_filepart(extractor: str):
 def get_items_df(dataset: str):
     if dataset.startswith('ml-'):
         return movielens_dataset.items_df(dataset)
+    elif dataset == 'bookcrossing':
+        return bookcrossing_dataset.items_df()
     else:
         return amazon_dataset.items_df(dataset)
+
+
+def get_base_folder(dataset: str):
+    if dataset.startswith('ml-'):
+        return movielens_dataset.BASE_DATA_FOLDER
+    elif dataset == 'bookcrossing':
+        return bookcrossing_dataset.BASE_DATA_FOLDER
+    else:
+        return amazon_dataset.BASE_DATA_FOLDER
+
 
 def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
     asset_path = get_asset_path(dataset)
@@ -561,10 +584,7 @@ def main(dataset: str, extractor: Literal['vit', 'clip', 'alexnet']):
         asset_path=asset_path,
         batch_size=16)
 
-    if dataset.startswith('ml-'):
-        base_folder = movielens_dataset.BASE_DATA_FOLDER
-    else:
-        base_folder = amazon_dataset.BASE_DATA_FOLDER
+    base_folder = get_base_folder(dataset)
 
     dest = base_folder / f'{dataset}_{extractor_file_path}_features.npz'
     np.savez_compressed(dest, **extracted_features)

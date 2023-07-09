@@ -25,7 +25,7 @@ ML_1M_IMDB = 'https://raw.githubusercontent.com/vectorsss/movielens_100k_1m_exte
 # Another set of generated links to from MovieLens movies IMDB
 ML_25M_IMDB = 'https://drive.google.com/uc?id=1fz8WjLy0_UYioFbMirYrjhM00EYnCaWP'
 
-DONWLOAD_PROCESSES = 8
+DOWNLOAD_PROCESSES = 8
 
 SOME_UA = 'Mozilla/5.0 (Linux; Android 7.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Focus/1.0 Chrome/59.0.3029.83 Mobile Safari/537.36'
 
@@ -38,6 +38,8 @@ def download_file(
         resp = requests.get(url, stream=True)
     else:
         resp = session.get(url, stream=True)
+
+    resp.raise_for_status()
 
     with open(dest_file, 'wb') as f:
         if show_progress:
@@ -276,7 +278,7 @@ def init_result_df(
 def download_imdb_data(
         dataset: str,
         imdb_ids: pd.Series,
-        max_workers=DONWLOAD_PROCESSES,
+        max_workers=DOWNLOAD_PROCESSES,
         resume=True
     ):
     result_df = init_result_df(dataset, imdb_ids, resume)

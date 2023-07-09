@@ -694,7 +694,7 @@ def save_image_heuristic(
         dest = dest_dir / f'{slug}.jpg'
 
         if resp.status_code == 404:
-            continue
+            return url, None
 
         resp.raise_for_status()
 

@@ -14,7 +14,7 @@ from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
 # How many products do we store in a single batch
 ITEM_BATCH_SIZE=2
 # How many sequences do we store in a single sample
-MAX_SEQ_SIZE = 256
+MAX_SEQ_SIZE = 2048
 
 
 def get_default_device() -> str:
@@ -64,7 +64,7 @@ def cls_pool(
 
 
 def get_full_texts(df: pd.DataFrame):
-    res = df['title'].fillna('') + ' ' +  df['description'].fillna('')
+    res = df['title'].fillna('') + '. ' +  df['description'].fillna('')
     res = res.apply(
         lambda x: BeautifulSoup(x, features='html.parser').get_text()
     )
