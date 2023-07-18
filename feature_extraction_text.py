@@ -81,7 +81,7 @@ def tokenize_products(
     return tokenizer(
         full_texts.to_list(),
         padding=True,
-        max_length=MAX_SEQ_SIZE,
+        max_length=512,
         truncation=True,
         return_tensors='pt'
     )

@@ -1,6 +1,7 @@
 
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+import re
 from shutil import COPY_BUFSIZE
 import threading
 from typing import Literal, NamedTuple, Optional, Tuple
@@ -59,6 +60,16 @@ def download_file(
             if data:
                 f.write(data)
 
+
+def fix_movie_title(original_title: str) -> str:
+    # Remove original title
+    without_original_title = re.sub(r'\s*\(.*\)\s*$', '', original_title)
+
+    # Move 'Article' to the end
+    res = re.sub(r'^(.*), \s*(\w+)\s*$', r'\2 \1', without_original_title)
+    return res
+
+
 def download_movielens_dataset(dataset: str, overwrite: bool = False):
     BASE_DATA_FOLDER.mkdir(exist_ok=True, parents=True)
     dest_folder = BASE_DATA_FOLDER / dataset
@@ -94,10 +105,7 @@ def download_movielens_dataset(dataset: str, overwrite: bool = False):
     title_regex = r'^(.*)\s*\((\d{4})\)\s*$'
     movies_df[['title', 'year']] = movies_df['title'].str.extract(title_regex)
 
-    original_title_regex = r'^(.*)\s*(\((.*)\))?\s*$'
-    original_title_df = movies_df['title'].str.extract(original_title_regex)
-    # The second and third captures can be empty
-    movies_df[['title', 'original_title']] = original_title_df[[0,2]]
+    movies_df['title'] = movies_df['title'].fillna('Unknown').apply(fix_movie_title)
 
     return movies_df
 
@@ -109,6 +117,7 @@ def download_artificial_links(dataset: str, overwrite: bool = False):
         return download_imdb_data_25m(overwrite)
     else:
         raise ValueError(f'Unknown dataset {dataset}')
+
 
 def download_imdb_data_1m(overwrite: bool = False):
     dest_file = BASE_DATA_FOLDER / 'ml-1m' / 'links_artificial.csv'
@@ -131,6 +140,7 @@ def download_imdb_data_1m(overwrite: bool = False):
     )
 
     return links_artificial.rename(columns={'imdbId': 'imdb_id'})
+
 
 def download_imdb_data_25m(overwrite: bool = False):
     dest_file = BASE_DATA_FOLDER / 'ml-25m-imdb/movie_ml_imdb.csv'
