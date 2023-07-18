@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 import clip
 import numpy as np
@@ -10,6 +10,10 @@ import torch
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer, PreTrainedTokenizerBase
+
+import movielens_dataset
+import bookcrossing_dataset
+import amazon_dataset
 
 # How many products do we store in a single batch
 ITEM_BATCH_SIZE=2
@@ -151,3 +155,55 @@ def extract_clip_text_features(
             progress.update(len(batch))
 
     return extracted_features
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('extractor', choices=['bert', 'clip'])
+    parser.add_argument('dataset', type=str)
+    return parser.parse_args()
+
+
+def get_items_df(dataset: str):
+    if dataset.startswith('ml-'):
+        return movielens_dataset.items_df(dataset)
+    elif dataset == 'bookcrossing':
+        return bookcrossing_dataset.items_df()
+    else:
+        return amazon_dataset.items_df(dataset)
+
+
+def get_base_folder(dataset: str):
+    if dataset.startswith('ml-'):
+        return movielens_dataset.BASE_DATA_FOLDER
+    elif dataset == 'bookcrossing':
+        return bookcrossing_dataset.BASE_DATA_FOLDER
+    else:
+        return amazon_dataset.BASE_DATA_FOLDER
+
+
+def get_extractor(extractor: Literal['bert', 'clip']):
+    if extractor == 'bert':
+        return extract_bert_text_features
+    elif extractor == 'clip':
+        return extract_clip_text_features
+    else:
+        ValueError(f'Unknown extractor {extractor}')
+
+
+def main():
+    args = parse_args()
+    items_df = get_items_df(args.dataset)
+    extractor = get_extractor(args.extractor)
+    dest = (
+        get_base_folder(args.dataset) / f'{args.dataset}_{extractor}_features.npz'
+    )
+    print(f'Destination is {dest}')
+
+    extracted_features = extractor(items_df)
+    np.savez_compressed(dest, **extracted_features)
+    print('Done!')
+
+
+if __name__ == '__main__':
+    main()
