@@ -1,5 +1,3 @@
-# For running VBPR
-lightfm
 matplotlib
 numpy
 plotly
@@ -11,6 +9,7 @@ tqdm
 sqlalchemy
 jsonlines
 gdown
+fake-useragent
 
 # For feature extraction
 pandas

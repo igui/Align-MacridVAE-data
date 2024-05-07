@@ -15,7 +15,7 @@ import pandas as pd
 BASE_DATA_FOLDER = Path('data/bookcrossing/')
 
 # Original datasets
-CSV_DUMP_URL = 'http://www2.informatik.uni-freiburg.de/~cziegler/BX/BX-CSV-Dump.zip'
+CSV_DUMP_URL = 'https://www.dropbox.com/scl/fi/b7xu96bsaqgg634kae6wt/BX-CSV-Dump.zip?rlkey=mmhuejp1j9jmmrgk0m9breto0&st=l4o6o0s2&dl=1'
 
 IMAGE_FOLDER = BASE_DATA_FOLDER / 'images'
 BOOKS_CSV_FILE = BASE_DATA_FOLDER / 'BX-Books.csv'
@@ -33,13 +33,14 @@ MIN_REVIEW_COUNT = 5
 
 def download_file(
         url: str,
-        dest_file: Path, show_progress = True,
+        dest_file: Path,
+        show_progress = True,
         session: Optional[requests.Session] = None
     ):
     if session is None:
-        resp = requests.get(url, stream=True)
+        resp = requests.get(url, stream=True, allow_redirects=True)
     else:
-        resp = session.get(url, stream=True)
+        resp = session.get(url, stream=True, allow_redirects=True)
 
     resp.raise_for_status()
 
@@ -211,8 +212,8 @@ def download_item_image(args: Tuple[str, str, threading.local]):
 
     # Many images are missing or are single pixels. Truncate them
     if dest_file.stat().st_size < 1000:
-        fp = open(f, 'wb')
-        fp.close()
+        with open(dest_file, 'wb') as f:
+            f.truncate(0)
 
     return isbn, dest_file
 
@@ -271,7 +272,8 @@ def download_images(
                 progress.set_postfix_str(
                     f'Errors {errors} {url=}', refresh=False
                 )
-            local_images[dest_file.stem] = dest_file.stat().st_size
+            else:
+                local_images[dest_file.stem] = dest_file.stat().st_size
             progress.update()
 
     return local_images

@@ -9,7 +9,7 @@ from datetime import date
 from itertools import count, islice
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from shutil import COPY_BUFSIZE
+from shutil import COPY_BUFSIZE, rmtree
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import jsonlines
@@ -27,6 +27,7 @@ from sqlalchemy.orm import (DeclarativeBase, Session, declarative_mixin,
                             relationship, aliased)
 from sqlalchemy.schema import CreateIndex, DropIndex, DropTable
 from sqlalchemy.sql.functions import GenericFunction
+from fake_useragent import UserAgent
 
 BASE_DATA_FOLDER = Path('data/amazon/')
 IMAGE_DOWNLOAD_PROCESSES = 4
@@ -265,6 +266,11 @@ def initialize_db(dataset: str) -> Path:
     Initializes the DB
     """
     db_path = dataset_db_path(dataset)
+    
+    # Just in case the dir doesn't exist create it
+    db_path.parent.mkdir(exist_ok=True, parents=True)
+    
+    
     engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     return db_path
@@ -586,15 +592,20 @@ def get_image_url(slug: str, max_dimension: int = 400) -> str:
     return f'{IMAGE_PREFIX}{slug}._SS{max_dimension}_.jpg'
 
 
-def image_webservice_url(asin: str, max_dimension: int = 400) -> str:
-    return f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&MarketPlace=US&ASIN={asin}&ServiceVersion=20070822&ID=AsinImage&WS=1&Format=SS{max_dimension}"
+def image_webservice_url(asin: str) -> str:
+    return f"https://images.amazon.com/images/P/{asin}.01.LZZZZZZZ.jpg"
 
 
 def save_image_webservice(args: Tuple[int, str, str, Any]) -> Tuple[str, Optional[str]]:
     product_id, asin, dataset, thread_data = args
     url = image_webservice_url(asin)
     try:
-        resp = thread_data.session.get(url, allow_redirects=True, stream=True)
+        resp = thread_data.session.get(
+            url,
+            allow_redirects=True,
+            headers={'User-Agent': UserAgent().random},
+            stream=True
+        )
     except ConnectionError as ex:
         # Some name resolution failure or stuff like that
         return str(ex), None
@@ -602,28 +613,29 @@ def save_image_webservice(args: Tuple[int, str, str, Any]) -> Tuple[str, Optiona
     if resp.status_code == 404: # Not found
         return url, None
     resp.raise_for_status()
+    
+    # Amazon returns an 1x1 GIF when the image is not found, so we ignore this
+    if int(resp.headers['content-length']) < 100:
+        return url, None
 
     # After redirect
     url = resp.request.url
-    slug = get_image_slug(url)
-    if not slug:
-        return url, None
 
     dest_dir = images_dir(dataset)
     dest_dir.mkdir(exist_ok=True)
 
-    dest = dest_dir / f'{slug}.jpg'
+    dest = dest_dir / f'{asin}.jpg'
     with dest.open('wb') as dest_file:
         for chunk in resp.iter_content(chunk_size=COPY_BUFSIZE):
             dest_file.write(chunk)
 
     with create_session(dataset) as sql_session:
         sql_session.add(ProductImage(
-            product_id=product_id, url=url, slug=slug, main=True
+            product_id=product_id, url=url, slug=asin, main=True
         ))
         sql_session.commit()
 
-    return url, slug
+    return url, asin
 
 
 def products_with_no_images_query() -> Select:
@@ -646,6 +658,9 @@ def products_with_no_main_image_df(dataset: str) -> pd.DataFrame:
 def download_main_product_images_webservice(
     dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES
 ):
+    dest_dir = images_dir(dataset)
+    dest_dir.mkdir(exist_ok=True)
+
     # This includes products with NO MAIN image and products with no image at all
     no_images = products_with_no_main_image_df(dataset)
 
@@ -690,11 +705,11 @@ def save_image_heuristic(
 
         url = get_image_url(image['slug'])
 
-        resp = thread_data.session.get(url, stream=True)
+        resp = thread_data.session.get(url, stream=True, headers={'User-Agent': UserAgent().random})
         dest = dest_dir / f'{slug}.jpg'
 
         if resp.status_code == 404:
-            return url, None
+            contin
 
         resp.raise_for_status()
 
@@ -723,12 +738,14 @@ def save_image_heuristic(
 
 
 def download_main_image_heuristic(
-    dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES
-):
+    dataset: str, max_workers=IMAGE_DOWNLOAD_PROCESSES):
     """
     Add images for remaining products using the first product image.
     it can have several false positives, though
     """
+    dest_dir = images_dir(dataset)
+    dest_dir.mkdir(exist_ok=True)
+    
     product_ids = products_with_no_images_query().with_only_columns(Product.id)
     product_images = select(ProductImage).where(
         ProductImage.product_id.in_(product_ids)
@@ -893,7 +910,7 @@ def load_reviews_into_db(
 
     progress_options = {
         'unit': 'review', 'unit_scale': True, 'smoothing': 0.01,
-        'desc': 'Loading reviews '
+        'desc': 'Filtering reviews '
     }
 
     drop_review_indexes(dataset)

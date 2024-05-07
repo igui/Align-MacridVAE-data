@@ -20,15 +20,21 @@ BASE_DATA_FOLDER = Path('data/movielens/')
 ML_1M_URL = 'https://files.grouplens.org/datasets/movielens/ml-1m.zip'
 ML_25M_URL = 'https://files.grouplens.org/datasets/movielens/ml-25m.zip'
 
-# Generated links to from MovieLens movies IMDB
+# Generated links to from MovieLens movies to IMDB
 ML_1M_IMDB = 'https://raw.githubusercontent.com/vectorsss/movielens_100k_1m_extension/main/data/ml-1m/links_artificial.csv'
 
-# Another set of generated links to from MovieLens movies IMDB
+# Another set of generated links from MovieLens movies to IMDB for ML25M
 ML_25M_IMDB = 'https://drive.google.com/uc?id=1fz8WjLy0_UYioFbMirYrjhM00EYnCaWP'
 
-DOWNLOAD_PROCESSES = 8
+# How many processes use to download IMDB data. Use more to increase download 
+# speed. Using too many might lead to 403 responses from IMDB. A value between
+# 2 and 8 works fine in most scenarios
+DOWNLOAD_PROCESSES = 2
 
 SOME_UA = 'Mozilla/5.0 (Linux; Android 7.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Focus/1.0 Chrome/59.0.3029.83 Mobile Safari/537.36'
+
+Dataset = Literal["ml-1m", "ml-25m"]  # Typing hint
+
 
 def download_file(
         url: str,
@@ -70,47 +76,21 @@ def fix_movie_title(original_title: str) -> str:
     return res
 
 
-def download_movielens_dataset(dataset: str, overwrite: bool = False):
+def download_movielens_dataset(dataset: Dataset, overwrite: bool = False):
     BASE_DATA_FOLDER.mkdir(exist_ok=True, parents=True)
-    dest_folder = BASE_DATA_FOLDER / dataset
-    if not dest_folder.exists() or overwrite:
-        with NamedTemporaryFile(suffix=f'_{dataset}.zip') as temp_zipfile:
-            download_file(ML_1M_URL, Path(temp_zipfile.name))
-            with ZipFile(temp_zipfile.name, 'r') as temp_zipfile_obj:
-                print(f'Extracting {temp_zipfile.name} to {BASE_DATA_FOLDER}')
-                temp_zipfile_obj.extractall(BASE_DATA_FOLDER)
 
     if dataset == 'ml-1m':
-        movies_file = BASE_DATA_FOLDER / dataset / 'movies.dat'
-        movies_df = pd.read_csv(
-            movies_file,
-            sep='::',
-            encoding='latin-1',
-            engine='python',
-            names=['movie_id', 'title', 'genres'],
-        )
+        print("Downloading ml-1m")
+        movies_df = download_imdb_data_1m(overwrite)
+    elif dataset == 'ml-25m':
+        print("Downloading ml-25m")
+        movies_df = download_imdb_data_25m(overwrite)
     else:
-        movies_file = BASE_DATA_FOLDER / dataset / 'movies.csv'
-        movies_df = pd.read_csv(
-            movies_file,
-        )
-        # To be compatible with ML-1m
-        movies_df.rename(columns={'movieId': 'movie_id'}, inplace=True)
-
-    movies_df.set_index('movie_id', inplace=True)
-    movies_df['genres'] = movies_df['genres'].str.split('|')
-
-    # Movielens have the title and year in the same column
-    # (e.g. 'Toy Story (1995)')
-    title_regex = r'^(.*)\s*\((\d{4})\)\s*$'
-    movies_df[['title', 'year']] = movies_df['title'].str.extract(title_regex)
-
-    movies_df['title'] = movies_df['title'].fillna('Unknown').apply(fix_movie_title)
-
+        raise ValueError(f"Unknown dataset {dataset}")
     return movies_df
 
 
-def download_artificial_links(dataset: str, overwrite: bool = False):
+def download_artificial_links(dataset: Dataset, overwrite: bool = False):
     if dataset == 'ml-1m':
         return download_imdb_data_1m(overwrite)
     elif dataset == 'ml-25m':
@@ -142,7 +122,10 @@ def download_imdb_data_1m(overwrite: bool = False):
     return links_artificial.rename(columns={'imdbId': 'imdb_id'})
 
 
-def download_imdb_data_25m(overwrite: bool = False):
+def download_imdb_data_25m(overwrite: bool = False) -> pd.DataFrame:
+    # Make the destination directory just in case
+    (BASE_DATA_FOLDER / 'ml-25m').mkdir(exist_ok=True)
+
     dest_file = BASE_DATA_FOLDER / 'ml-25m-imdb/movie_ml_imdb.csv'
     if not dest_file.exists() or overwrite:
         with NamedTemporaryFile(suffix='_ml-25m.zip', delete=False) as temp_zipfile:
@@ -162,7 +145,8 @@ def download_imdb_data_25m(overwrite: bool = False):
 
     return res
 
-def items_df(dataset: Literal['ml-1m', 'ml-25m']) -> pd.DataFrame:
+
+def items_df(dataset: Dataset) -> pd.DataFrame:
     movies_df = download_movielens_dataset(dataset)
     artificial_links = download_artificial_links(dataset)
 
@@ -195,7 +179,7 @@ def items_df(dataset: Literal['ml-1m', 'ml-25m']) -> pd.DataFrame:
 
 
 def find_image_url(soup: BeautifulSoup) -> Optional[str]:
-    og_image_meta = soup.find('meta', { 'property': "og:image" })
+    og_image_meta = soup.find('meta', {'property': "og:image"})
     result = og_image_meta['content']
     if not result.endswith('imdb_logo.png'):
         return result
@@ -213,8 +197,8 @@ def find_summary(soup: BeautifulSoup) -> Optional[str]:
     )
     if summaries_parent is None:
         return None
-    summaries =  summaries_parent.find_all(
-        'div', { 'class': 'ipc-html-content-inner-div' }
+    summaries = summaries_parent.find_all(
+        'div', {'class': 'ipc-html-content-inner-div'}
     )
     if len(summaries) == 0:
         return None
@@ -222,6 +206,7 @@ def find_summary(soup: BeautifulSoup) -> Optional[str]:
     summary_idx = 1 if len(summaries) > 1 else 0
 
     return summaries[summary_idx].text
+
 
 class MovieDataResult(NamedTuple):
     movie_id: int
@@ -231,8 +216,14 @@ class MovieDataResult(NamedTuple):
 
 
 def download_movie_data(
-        args: Tuple[int, str, str, threading.local]
-    ) -> MovieDataResult:
+    args: Tuple[int, str, str, threading.local]
+) -> MovieDataResult:
+    """
+    Scrape IMDB.com to download the movie data,
+    since it is not present in the original
+    dataset. While it is not idea, it is one way of getting
+    the data wwe need.
+    """
     movie_id, imdb_id, dataset, thread_data = args
 
     url = f'https://www.imdb.com/title/{imdb_id}/plotsummary/'
@@ -245,9 +236,9 @@ def download_movie_data(
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
 
-        image_url=find_image_url(soup)
-        synopsis=find_synopsis(soup)
-        summary=find_summary(soup)
+        image_url = find_image_url(soup)
+        synopsis = find_synopsis(soup)
+        summary = find_summary(soup)
 
     if image_url is not None:
         img_folder = BASE_DATA_FOLDER / dataset / 'images'
@@ -268,12 +259,13 @@ def download_movie_data(
         summary=summary
     )
 
-def get_imdb_data_file(dataset: str) -> Path:
+
+def get_imdb_data_file(dataset: Dataset) -> Path:
     return BASE_DATA_FOLDER / dataset / 'imdb_data.pkl'
 
 
 def init_result_df(
-        dataset: str, imdb_ids: pd.Series, resume: bool
+    dataset: Dataset, imdb_ids: pd.Series, resume: bool
 ) -> pd.DataFrame:
     result_df = pd.DataFrame(index=imdb_ids.index)
     result_df['imdb_id'] = imdb_ids
@@ -285,12 +277,13 @@ def init_result_df(
 
     return result_df
 
+
 def download_imdb_data(
-        dataset: str,
-        imdb_ids: pd.Series,
-        max_workers=DOWNLOAD_PROCESSES,
-        resume=True
-    ):
+    dataset: Dataset,
+    imdb_ids: pd.Series,
+    max_workers=DOWNLOAD_PROCESSES,
+    resume=True
+):
     result_df = init_result_df(dataset, imdb_ids, resume)
 
     pending_imdb_id = result_df.loc[~result_df['processed']]['imdb_id']
@@ -299,6 +292,7 @@ def download_imdb_data(
 
     # Use a thread-exclussive request session to speed up image download
     thread_storage = threading.local()
+
     def init_thread_storage():
         session = requests.Session()
         session.headers.update({
@@ -333,24 +327,27 @@ def download_imdb_data(
     return result_df.drop(columns=['processed', 'imdb_id'])
 
 
-def get_reviews_file(dataset: str) -> Path:
+def get_reviews_file(dataset: Dataset) -> Path:
     return BASE_DATA_FOLDER / dataset / 'reviews.pkl'
 
 
-def images_dir(dataset: str) -> Path:
+def images_dir(dataset: Dataset) -> Path:
     return BASE_DATA_FOLDER / dataset / 'images'
 
-def get_csv_reviews(dataset: str) -> pd.DataFrame:
+
+def get_csv_reviews(dataset: Dataset) -> pd.DataFrame:
     if dataset == 'ml-1m':
         sep = '::'
         engine = 'python'
         filename = 'ratings.dat'
         names = ['user_id', 'movie_id', 'rating', 'timestamp'],
-    else:
+    elif dataset == 'ml-25m':
         sep = ','
         engine = None
         filename = 'ratings.csv'
         names = None
+    else:
+        raise ValueError(f'Unknown dataset {dataset}')
 
     return pd.read_csv(
         BASE_DATA_FOLDER / dataset / filename,
@@ -359,7 +356,8 @@ def get_csv_reviews(dataset: str) -> pd.DataFrame:
         names=names,
     )
 
-def reviews_df(dataset: str, used_cached: bool = True) -> pd.DataFrame:
+
+def reviews_df(dataset: Dataset, used_cached: bool = True) -> pd.DataFrame:
     reviews_file = get_reviews_file(dataset)
 
     # It is much faster to read the pickle file directly instead of the DAT/CSV
